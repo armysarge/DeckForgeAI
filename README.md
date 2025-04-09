@@ -74,6 +74,82 @@ This will:
 The `query_cards.py` script provides various options for querying the database:
 
 ```bash
+python query_cards.py --name "Arcane Intellect"
+python query_cards.py --class Mage --rarity Legendary
+```
+
+### AI Deck Building (ALPHA)
+
+DeckForgeAI includes machine learning capabilities to analyze card synergies and build decks. Here's how to use these features:
+
+#### 1. Training the AI Model
+
+Before generating decks, you need to train the AI model on your card database:
+
+```bash
+# Train a new model with default settings
+python ai_deckbuilder.py --train
+
+# Train with a custom number of clusters (advanced)
+python ai_deckbuilder.py --train --clusters 12
+```
+
+This will:
+- Load collectible cards from your database
+- Analyze card attributes and synergies using machine learning
+- Save the trained model to `card_model.joblib`
+
+Training only needs to be done once, or when you update your card database.
+
+#### 2. Generating Decks
+
+Once the model is trained, you can generate decks with various strategies:
+
+```bash
+# Generate a midrange Mage deck
+python ai_deckbuilder.py --build-deck --class MAGE --strategy midrange
+
+# Generate an aggro Hunter deck
+python ai_deckbuilder.py --build-deck --class HUNTER --strategy aggro
+
+# Generate a control Priest deck and save to custom file
+python ai_deckbuilder.py --build-deck --class PRIEST --strategy control --output priest_control.json
+```
+
+Available strategies:
+- `aggro`: Fast, aggressive decks with low mana curve
+- `midrange`: Balanced decks with efficient minions
+- `control`: Defensive decks with removal and late-game value
+- `combo`: Decks built around specific card combinations
+
+#### 3. Customizing Generated Decks
+
+You can further customize the decks the AI generates:
+
+```bash
+# Include specific cards (by card ID)
+python ai_deckbuilder.py --build-deck --class WARRIOR --include-cards CORE_EX1_606,EX1_391
+
+# Exclude certain card sets
+python ai_deckbuilder.py --build-deck --class MAGE --exclude-sets CORE,LEGACY
+```
+
+#### 4. Finding Card Synergies
+
+You can also use the AI to find cards that synergize well with a specific card:
+
+```bash
+# Find top 15 cards with synergy to a specific card
+python ai_deckbuilder.py --card-synergies EX1_559
+```
+
+#### 5. Deck Output
+
+When generating a deck, DeckForgeAI will:
+- Display the deck in the console
+- Save a mana curve visualization as `deck_mana_curve.png`
+- Export the deck to a JSON file (default: `deck.json`)
+- Generate a Hearthstone-compatible deck code for easy import into the game
 # List all card classes
 python query_cards.py --list-classes
 
