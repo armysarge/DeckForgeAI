@@ -4,11 +4,12 @@
 
 [![SQLLite](https://img.shields.io/badge/SQLite-3.8%2B-blue.svg)](https://www.sqlite.org/index.html)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
+[![scikit-learn](https://img.shields.io/badge/scikit--learn-1.0%2B-blue.svg)](https://scikit-learn.org/)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![GitHub issues](https://img.shields.io/github/issues/armysarge/DeckForgeAI)](https://github.com/armysarge/DeckForgeAI/issues)
 
-# DeckForgeAI - Hearthstone Card Database & Deck Manager
+# DeckForgeAI
 
 A powerful toolset for managing Hearthstone decks and querying the complete Hearthstone card database. Includes AI-powered deckbuilding to optimize strategies and streamline gameplay planning.
 
@@ -16,21 +17,35 @@ A powerful toolset for managing Hearthstone decks and querying the complete Hear
 
 Current development status as of April 9, 2025:
 - ✅ Build SQLite DB (Done)
-- 🔄 Query cards (Still in progress)
-- 🔜 Deck Management (Coming Soon)
+- ✅ Query cards (Complete)
+- 🔄 AI Deck Building (ALPHA - Still being refined)
+- 🔄 Deck Management (In progress)
 
 ## Features
 
 - Fetches all Hearthstone cards from the HearthstoneJSON API
 - Stores cards in a SQLite database with comprehensive card attributes
 - Provides a query tool for searching and filtering cards
+- **AI-Powered Deck Building (ALPHA):**
+  - ⚠️ **Note:** The AI deck creation feature is currently in ALPHA stage. Generated decks may not always make complete sense or be fully optimized for competitive play.
+  - Analyzes card synergies using machine learning
+  - Creates decks based on different strategies (aggro, midrange, control, combo)
+  - Generates mana curve visualizations
+  - Exports decks to JSON format
+  - Get Deck Codes for easy import into Hearthstone
+  - Supports multiple deck formats for flexibility
 
 ## Requirements
 
 - Python 3.6+
 - Required packages:
-  - `requests`
-  - `sqlite3` (included in Python standard library)
+  - `requests` - For API calls
+  - `sqlite3` (included in Python standard library) - For database operations
+  - `pandas` - For data manipulation
+  - `scikit-learn` - For machine learning algorithms
+  - `numpy` - For numerical computations
+  - `matplotlib` - For visualization
+  - `joblib` - For model persistence
 
 ## Installation
 

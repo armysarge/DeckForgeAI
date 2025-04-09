@@ -16,12 +16,18 @@ env/
 
 # Environment variables
 .env
+*.json
+*.png
+*.jpeg
+*.jpg
 
 # IDE specific files
 .idea/
 .vscode/
 *.swp
 *.swo
+
+*.joblib
 
 # Logs
 *.log
