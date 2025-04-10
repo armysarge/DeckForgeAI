@@ -42,7 +42,7 @@ class HearthstoneDeckBuilder:
         query = """
         SELECT c.id, c.dbfid, c.name, c.cost, c.attack, c.health, c.durability, c.armor,
                cc.name as card_class, ct.name as card_type, r.name as rarity,
-               cs.name as card_set, c.text
+               cs.name as card_set, c.text, c.targetingArrowText, cs.name
         FROM cards c
         LEFT JOIN card_classes cc ON c.card_class_id = cc.id
         LEFT JOIN card_types ct ON c.card_type_id = ct.id
@@ -78,7 +78,8 @@ class HearthstoneDeckBuilder:
             'text': '',
             'flavor': '',
             'artist': '',
-            'mechanics': ''
+            'mechanics': '',
+            'targetingArrowText': ''
         }, inplace=True)
 
         print(f"Loaded {len(self.df)} collectible cards.")
@@ -93,7 +94,7 @@ class HearthstoneDeckBuilder:
         string_columns = self.df.select_dtypes(include=['object']).columns.tolist()
 
         # Remove columns we don't want to one-hot encode
-        exclude_columns = ['id', 'name', 'text', 'flavor', 'mechanics']
+        exclude_columns = ['id', 'name', 'flavor', 'mechanics']
         categorical_features = [col for col in string_columns if col not in exclude_columns]
 
         print(f"One-hot encoding {len(categorical_features)} categorical features")
@@ -118,7 +119,7 @@ class HearthstoneDeckBuilder:
         # First, get all column names
         all_columns = df_encoded.columns.tolist()
         # Then exclude non-numerical columns
-        exclude_cols = ['id', 'dbfid', 'name', 'text', 'flavor', 'artist',
+        exclude_cols = ['id', 'dbfid', 'name', 'flavor', 'artist',
                       'mechanics', 'card_id', 'collectible']
         # Create feature columns list with only columns that exist in the dataframe
         feature_cols = [col for col in all_columns if col not in exclude_cols
@@ -233,18 +234,19 @@ class HearthstoneDeckBuilder:
 
         return results
 
-    def generate_deck(self, hero_class, strategy='midrange', cards_to_include=None, exclude_sets=None):
+    def generate_deck(self, hero_class, strategy='midrange', format_type='standard', cards_to_include=None, exclude_sets=None):
         """
         Generate a full Hearthstone deck (30 cards) for a specific hero class and strategy.
 
         Parameters:
         - hero_class: The class to build for (e.g., 'MAGE', 'WARRIOR')
         - strategy: The deck strategy ('aggro', 'midrange', 'control', 'combo')
+        - format_type: The deck format ('standard', 'wild', 'classic', etc.)
         - cards_to_include: List of specific card IDs to include in the deck
         - exclude_sets: List of card sets to exclude
 
         Returns:
-        - A deck dictionary with cards and metadata
+        - A deck dictionary with cards and metadata (minimum 30 cards)
         """
         if self.df is None:
             self.load_cards_to_dataframe()
@@ -256,19 +258,32 @@ class HearthstoneDeckBuilder:
         deck_cards = []
         cards_to_include = cards_to_include or []
 
-        # Filter cards by class (and neutral)
+        # Get format-legal sets
+        format_sets = self._get_format_sets(format_type)
+
+        # Filter cards by class (and neutral) and format-legal sets
         valid_classes = [hero_class, 'NEUTRAL']
-        class_cards_df = self.df[self.df['card_class'].isin(valid_classes)]
+        class_cards_df = self.df[
+            (self.df['card_class'].isin(valid_classes)) &
+            (self.df['card_set'].isin(format_sets))
+        ]
+
+        print(f"Found {len(class_cards_df)} legal cards for {hero_class} in {format_type} format")
 
         # Exclude certain sets if specified
         if exclude_sets:
             class_cards_df = class_cards_df[~class_cards_df['card_set'].isin(exclude_sets)]
+            print(f"After excluding specified sets, {len(class_cards_df)} cards remain")
 
-        # Add requested cards first (if they're valid for the class)
+        # Add requested cards first (if they're valid for the class and format)
         for card_id in cards_to_include:
             card = self.card_query.get_card_by_id(card_id)
             if card and (card['card_class_name'] == hero_class or card['card_class_name'] == 'NEUTRAL'):
-                deck_cards.append(card)
+                # Check if card is format-legal
+                if card['card_set_name'] in format_sets:
+                    deck_cards.append(card)
+                else:
+                    print(f"Warning: Card {card['name']} ({card_id}) is not legal in {format_type} format")
 
         # Set up strategy parameters
         strategy_params = {
@@ -473,11 +488,10 @@ class HearthstoneDeckBuilder:
 
                 # After adding a card, check if it enables an expanded deck
                 if not allows_expanded:  # Only re-check if we weren't already allowed
-                    allows_expanded, max_size = self._allows_expanded_deck(deck_cards)
-
-        # If we still have space, fill with best synergy cards regardless of type
+                    allows_expanded, max_size = self._allows_expanded_deck(deck_cards)        # If we still have space, fill with best synergy cards regardless of type
         if len(deck_cards) < max_size:
-            remaining_cards = class_cards_df[~class_cards_df['id'].isin([c['id'] for c in deck_cards])]
+            # First try with remaining cards that aren't already at max copies
+            remaining_cards = class_cards_df.copy()
             remaining_cards = self._sort_by_synergy_with_deck(remaining_cards, deck_cards)
 
             for _, card_row in remaining_cards.iterrows():
@@ -485,22 +499,24 @@ class HearthstoneDeckBuilder:
                     break
 
                 card = self.card_query.get_card_by_id(card_row['id'])
-
-                # Skip if we already have two of this card or it's legendary
-                if card and (card['rarity_name'] == 'LEGENDARY' and
-                            card['id'] in [c['id'] for c in deck_cards]):
+                if not card:
                     continue
 
-                # Skip if we already have two of this card
-                if card and sum(1 for c in deck_cards if c['id'] == card['id']) >= 2:
-                    continue
+                # Check duplicate restrictions based on card rarity
+                if card['rarity_name'] == 'LEGENDARY':
+                    # Can only have one copy of legendary cards
+                    if card['id'] in [c['id'] for c in deck_cards]:
+                        continue
+                else:
+                    # Can have up to two copies of non-legendary cards
+                    if sum(1 for c in deck_cards if c['id'] == card['id']) >= 2:
+                        continue
 
-                deck_cards.append(card)
-
-        # Organize the final deck
+                deck_cards.append(card)        # Organize the final deck
         final_deck = {
             'class': hero_class,
             'strategy': strategy,
+            'format': format_type,
             'card_count': len(deck_cards),
             'cards': deck_cards,
             'mana_curve': self._calculate_mana_curve(deck_cards),
@@ -625,6 +641,62 @@ class HearthstoneDeckBuilder:
         # No special cards found
         return False, 30
 
+    def _get_format_sets(self, format_type='standard'):
+        """
+        Get a list of card sets that are legal in the specified format.
+
+        Parameters:
+        - format_type: The deck format ('standard', 'wild', 'classic', 'twist')
+
+        Returns:
+        - A list of card set names that are legal in the specified format
+        """
+        # Query the database for format-legal sets using the format flags
+        format_type = format_type.lower()
+
+        if format_type == 'wild':
+            # Wild format allows all collectible sets
+            query = """
+            SELECT name FROM card_sets
+            WHERE wild = 1
+            """
+        elif format_type == 'standard':
+            # Standard format allows only standard-flagged sets
+            query = """
+            SELECT name FROM card_sets
+            WHERE standard = 1
+            """
+        elif format_type == 'classic':
+            # Classic format allows only classic-flagged sets
+            query = """
+            SELECT name FROM card_sets
+            WHERE classic = 1
+            """
+        elif format_type == 'twist':
+            # Twist format is currently the same as standard, but could be customized later
+            # For now, use standard-flagged sets
+            query = """
+            SELECT name FROM card_sets
+            WHERE twist = 1
+            """
+        else:
+            # Default to standard format
+            query = """
+            SELECT name FROM card_sets
+            WHERE standard = 1
+            """
+
+        # Execute query
+        cursor = self.conn.cursor()
+        cursor.execute(query)
+
+        # Get set names
+        results = cursor.fetchall()
+        format_sets = [row[0] for row in results]
+
+        print(f"Format {format_type} legal sets: {format_sets}")
+        return format_sets
+
     def plot_mana_curve(self, deck):
         """Plot the mana curve of a deck."""
         mana_curve = deck['mana_curve']
@@ -674,7 +746,6 @@ class HearthstoneDeckBuilder:
             json.dump(serialized_deck, f, indent=4)
 
         print(f"Deck exported to {file_path}")
-
     def generate_deck_code(self, deck):
         """
         Generate a Hearthstone deck code that can be imported directly into the game.
@@ -699,34 +770,65 @@ class HearthstoneDeckBuilder:
 
         class_id = class_row['id']
 
-        # Create a new Deck object with the format set to Standard
+        # Map the format string to FormatType enum
+        format_mapping = {
+            'standard': FormatType.FT_STANDARD,
+            'wild': FormatType.FT_WILD,
+            'classic': FormatType.FT_CLASSIC,
+            'twist': FormatType.FT_TWIST
+        }
+        format_type = format_mapping.get(deck.get('format', 'standard').lower(), FormatType.FT_STANDARD)
+
+        # Create a new Deck object with the specified format
         hs_deck = Deck()
         hs_deck.heroes = [class_id]
-        hs_deck.format = FormatType.FT_STANDARD
+        hs_deck.format = format_type
 
-        # Count cards by their dbf_id
+        # Debug output
+        print(f"Class ID: {class_id}, Format: {format_type}")
+        print(f"Total cards in deck: {len(deck['cards'])}")        # Count cards by their dbf_id - use a dictionary to track duplicates
         cards_by_dbfid = {}
+
+        # First, count how many times each card ID appears in the deck
+        card_id_count = {}
         for card in deck['cards']:
-            # We need to get the dbfid for each card
+            card_id_count[card['id']] = card_id_count.get(card['id'], 0) + 1
+
+        # Now process each unique card ID
+        for card_id, count in card_id_count.items():
+            # Get the dbfid for the card
             query = "SELECT dbfid FROM cards WHERE id = ?"
-            cursor.execute(query, (card['id'],))
+            cursor.execute(query, (card_id,))
             card_row = cursor.fetchone()
 
             if not card_row:
-                print(f"Warning: Card ID {card['id']} not found in database")
+                print(f"Warning: Card ID {card_id} not found in database")
                 continue
 
             dbfid = card_row['dbfid']
-            cards_by_dbfid[dbfid] = cards_by_dbfid.get(dbfid, 0) + 1        # Add cards to the deck
+            # Add the count for this card
+            cards_by_dbfid[dbfid] = cards_by_dbfid.get(dbfid, 0) + count
+
+            # Print the card info for debugging
+            print(f"Card ID {card_id} occurs {count} times, dbfid: {dbfid}")
+
+        # Debug output of card counts
+        print(f"Card count by dbfid: {len(cards_by_dbfid)} unique cards")
+
+        # Convert the dictionary to the format required by hearthstone-deckstrings
+        deck_cards = []
         for dbfid, count in cards_by_dbfid.items():
-            # The correct method name in the hearthstone library is 'cards' not 'add_card'
-            hs_deck.cards.append([dbfid, count])        # Generate the deck code
+            # The hearthstone library expects a list of [dbfid, count] pairs
+            deck_cards.append([dbfid, count])
+            #print(f"Added card dbfid {dbfid} with count {count}")
+
+        # Generate the deck code
         try:
-            # The write_deckstring function needs heroes and format as separate arguments
+            # Explicitly set all required parameters for write_deckstring
             deck_code = write_deckstring(
-                cards=hs_deck.cards,
-                heroes=hs_deck.heroes,
-                format=hs_deck.format
+                cards=deck_cards,
+                heroes=[class_id],
+                format=format_type
             )
             return deck_code
         except Exception as e:
@@ -744,6 +846,8 @@ def main():
     parser.add_argument('--class', dest='hero_class', type=str, help='Hero class for the deck')
     parser.add_argument('--strategy', type=str, choices=['aggro', 'midrange', 'control', 'combo'],
                       default='midrange', help='Deck strategy')
+    parser.add_argument('--format', dest='format_type', type=str, choices=['standard', 'wild', 'classic', 'twist'],
+                      default='standard', help='Deck format (standard, wild, classic, twist)')
     parser.add_argument('--include-cards', type=str, help='Comma-separated list of card IDs to include')
     parser.add_argument('--exclude-sets', type=str, help='Comma-separated list of card sets to exclude')
     parser.add_argument('--card-synergies', type=str, help='Get cards with synergy to this card ID')
@@ -787,43 +891,59 @@ def main():
             deck = builder.generate_deck(
                 args.hero_class.upper(),
                 strategy=args.strategy,
+                format_type=args.format_type,
                 cards_to_include=cards_to_include,
                 exclude_sets=exclude_sets
-            )
+            )            # Print deck info in Hearthstone format
+            print(f"### {deck['class']} {deck['strategy'].title()} Deck")
+            print(f"# Class: {deck['class']}")
+            print(f"# Format: {deck['format'].title()}")
+            print("#")            # Count card occurrences by name only (ignoring ID)
+            card_counts_by_name = {}
+            for card in deck['cards']:
+                card_counts_by_name[card['name']] = card_counts_by_name.get(card['name'], 0) + 1
 
-            # Print deck info
-            print(f"\n{deck['class']} {deck['strategy'].title()} Deck")
-            print("-" * 40)
-            print(f"Total cards: {deck['card_count']}")
-            print("\nMana Curve:")
-            for cost, count in deck['mana_curve'].items():
-                cost_label = cost if int(cost) < 7 else "7+"
-                print(f"{cost_label}: {count}")
-
-            print("\nCard Types:")
-            for card_type, count in deck['card_types'].items():
-                print(f"{card_type}: {count}")
-
-            print("\nCards:")
-            # Group cards by mana cost
+            # Group cards by mana cost for sorted output
             by_cost = {}
+            processed_names = set()  # Track which card names we've already processed
+
+            # First, sort all cards by cost
             for card in deck['cards']:
                 cost = card['cost']
-                if cost > 7:
-                    cost = 7
                 if cost not in by_cost:
                     by_cost[cost] = []
-                by_cost[cost].append(card)
 
-            # Print cards sorted by mana cost
+                # Only add each unique card name once to the cost group
+                if card['name'] not in processed_names:
+                    by_cost[cost].append(card)
+                    processed_names.add(card['name'])
+
+            # Print cards in mana cost order
             for cost in sorted(by_cost.keys()):
                 cost_cards = by_cost[cost]
-                cost_label = str(cost) if cost < 7 else "7+"
-                print(f"\n{cost_label} Mana:")
-
-                # Sort by name
+                # Sort by name within each cost group
                 for card in sorted(cost_cards, key=lambda x: x['name']):
-                    print(f"  {card['name']} ({card['card_type_name']})")
+                    count = card_counts_by_name[card['name']]
+                    print(f"# {count}x ({cost}) {card['name']}")
+
+            # Print special cards with modules if any exist (like Zilliax)
+            # This would require additional logic to identify and group module cards
+
+            # Print extra statistics in a comment section
+            #print("\n# Card counts by type:")
+            #for card_type, count in deck['card_types'].items():
+            #    print(f"# {card_type}: {count}")
+
+            #print("\n# Mana curve:")
+            #for cost, count in deck['mana_curve'].items():
+            #    cost_label = cost if int(cost) < 7 else "7+"
+            #    print(f"# {cost_label}: {count}")
+
+            print("\nDeck Code:")
+            print(deck['deck_code'])
+
+            link = f"https://hearthstone.blizzard.com/en-us/deckbuilder?deckcode={deck['deck_code']}&class={deck['class']}&deckFormat={deck['format']}"
+            print(f"Link: {link}")
 
             # Plot the mana curve
             builder.plot_mana_curve(deck)

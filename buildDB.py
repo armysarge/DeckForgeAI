@@ -9,6 +9,31 @@ import hashlib
 import re
 from datetime import datetime
 
+# Define current Standard sets
+# Note: Update this list when Standard rotation happens
+standard_sets = [
+    'CORE',
+    'FESTIVAL_OF_LEGENDS',
+    'PATH_OF_ARTHAS',
+    'RETURN_OF_THE_LICH_KING',
+    'TITANS',
+    'BATTLE_OF_THE_BANDS',
+    'WHIZBANGS_WORKSHOP'
+]
+
+# Define Classic sets
+classic_sets = ['VANILLA']
+
+#Define Twist sets
+twist_sets = [
+    'CORE',
+    'FESTIVAL_OF_LEGENDS',
+    'PATH_OF_ARTHAS',
+    'RETURN_OF_THE_LICH_KING',
+    'TITANS',
+    'BATTLE_OF_THE_BANDS',
+    'WHIZBANGS_WORKSHOP'
+]
 
 class HearthstoneDBBuilder:
     """Class to build a database of all Hearthstone cards using HearthstoneJSON API."""
@@ -82,11 +107,15 @@ class HearthstoneDBBuilder:
         )
         ''')
 
-        # Card Sets lookup table
+        # Card Sets lookup table with collectible flag
         self.cursor.execute('''
         CREATE TABLE IF NOT EXISTS card_sets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL
+            name TEXT UNIQUE NOT NULL,
+            standard INTEGER DEFAULT 0,
+            wild INTEGER DEFAULT 1,
+            classic INTEGER DEFAULT 0,
+            twist INTEGER DEFAULT 0
         )
         ''')
 
@@ -495,6 +524,10 @@ class HearthstoneDBBuilder:
                 if processed_cards:
                     total_updated = self.store_cards(processed_cards)
                     print(f"Successfully stored {total_updated} cards in database")
+
+                    # Update card set format information
+                    print("\n=== UPDATING CARD SET FORMAT INFORMATION ===")
+                    self.update_card_set_formats()
                 else:
                     print("No cards processed from JSON")
             else:
@@ -683,6 +716,51 @@ class HearthstoneDBBuilder:
             print(f"Error with lookup table {table_name} for value '{value}': {e}")
             return None
 
+    def update_card_set_formats(self):
+        global standard_sets, twist_sets, classic_sets
+        """Update card sets with format information (Standard, Wild, Classic).
+
+        This marks each card set with flags indicating which format(s) it belongs to.
+        """
+        print("Updating card set format information...")
+
+        # Update Standard sets
+        placeholders = ','.join(['?'] * len(standard_sets))
+        self.cursor.execute(f"""
+        UPDATE card_sets SET standard = 1
+        WHERE name IN ({placeholders})
+        """, standard_sets)
+
+        # Update twist sets
+        placeholders = ','.join(['?'] * len(twist_sets))
+        self.cursor.execute(f"""
+        UPDATE card_sets SET twist = 1
+        WHERE name IN ({placeholders})
+        """, twist_sets)
+
+        # Update Classic sets
+        placeholders = ','.join(['?'] * len(classic_sets))
+        self.cursor.execute(f"""
+        UPDATE card_sets SET classic = 1
+        WHERE name IN ({placeholders})
+        """, classic_sets)
+
+        self.conn.commit()
+
+        # Print format information
+        self.cursor.execute("""
+        SELECT name, standard, wild, classic, twist
+        FROM card_sets
+        ORDER BY name
+        """)
+
+        set_info = self.cursor.fetchall()
+
+        for row in set_info:
+            name, collectible, standard, wild, classic = row
+            print(f"{name:<25} {collectible:<12} {standard:<10} {wild:<10} {classic:<10}")
+
+        print("\nCard set format information updated")
 
 if __name__ == "__main__":
     builder = HearthstoneDBBuilder()
