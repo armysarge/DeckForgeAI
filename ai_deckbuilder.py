@@ -781,7 +781,7 @@ class HearthstoneDeckBuilder:
 
         # Create a new Deck object with the specified format
         hs_deck = Deck()
-        hs_deck.heroes = [class_id]
+        #hs_deck.heroes = [class_id]
         hs_deck.format = format_type
 
         # Debug output
@@ -791,12 +791,28 @@ class HearthstoneDeckBuilder:
 
         # First, count how many times each card ID appears in the deck
         card_id_count = {}
-        for card in deck['cards']:
-            card_id_count[card['id']] = card_id_count.get(card['id'], 0) + 1
+        for card in deck['cards']:            # Count cards by their reference name rather than ID to handle variants
+            # This catches both prefix and postfix variants like CORE_REV_601, REV_601, and REV_601_WEAPON
+            if card['name'] not in card_id_count:
+                card_id_count[card['name']] = 1
+            else:
+                card_id_count[card['name']] = card_id_count.get(card['name'], 0) + 1
 
-        # Now process each unique card ID
-        for card_id, count in card_id_count.items():
-            # Get the dbfid for the card
+        print(card_id_count)
+
+        # Now process each unique card name
+        for card_name, count in card_id_count.items():
+            # Get the dbfid for one instance of this card (prefer the one in the deck)
+            card_id = None
+            for card in deck['cards']:
+                if card['name'] == card_name:
+                    card_id = card['id']
+                    break
+
+            if not card_id:
+                print(f"Warning: Cannot find ID for card {card_name}")
+                continue
+
             query = "SELECT dbfid FROM cards WHERE id = ?"
             cursor.execute(query, (card_id,))
             card_row = cursor.fetchone()
@@ -810,13 +826,14 @@ class HearthstoneDeckBuilder:
             cards_by_dbfid[dbfid] = cards_by_dbfid.get(dbfid, 0) + count
 
             # Print the card info for debugging
-            print(f"Card ID {card_id} occurs {count} times, dbfid: {dbfid}")
+           # print(f"Card ID {card_id} occurs {count} times, dbfid: {dbfid}")
 
         # Debug output of card counts
-        print(f"Card count by dbfid: {len(cards_by_dbfid)} unique cards")
+        #print(f"Card count by dbfid: {len(cards_by_dbfid)} unique cards")
 
         # Convert the dictionary to the format required by hearthstone-deckstrings
         deck_cards = []
+
         for dbfid, count in cards_by_dbfid.items():
             # The hearthstone library expects a list of [dbfid, count] pairs
             deck_cards.append([dbfid, count])
