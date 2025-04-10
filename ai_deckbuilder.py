@@ -275,15 +275,21 @@ class HearthstoneDeckBuilder:
             class_cards_df = class_cards_df[~class_cards_df['card_set'].isin(exclude_sets)]
             print(f"After excluding specified sets, {len(class_cards_df)} cards remain")
 
-        # Add requested cards first (if they're valid for the class and format)
+        # Initialize sideboard separately from main deck
+        sideboard_cards = []
+
+        # Add requested cards first
         for card_id in cards_to_include:
             card = self.card_query.get_card_by_id(card_id)
             if card and (card['card_class_name'] == hero_class or card['card_class_name'] == 'NEUTRAL'):
-                # Check if card is format-legal
                 if card['card_set_name'] in format_sets:
                     deck_cards.append(card)
                 else:
                     print(f"Warning: Card {card['name']} ({card_id}) is not legal in {format_type} format")
+
+        # Check if deck contains special cards that enable expanded deck size first
+        # This needs to be checked before adding more cards
+        allows_expanded, max_size = self._allows_expanded_deck(deck_cards)
 
         # Set up strategy parameters
         strategy_params = {
@@ -434,7 +440,11 @@ class HearthstoneDeckBuilder:
 
                     deck_cards.append(card)
                     to_add -= 1
-        allows_expanded, max_size = self._allows_expanded_deck(deck_cards)        # Calculate target card type counts based on strategy
+
+        # Check if any special cards in the deck allow for an expanded deck size
+        allows_expanded, max_size = self._allows_expanded_deck(deck_cards)
+
+        # Calculate target card type counts based on strategy
         card_type_targets = {}
         current_type_counts = self._count_card_types_by_name(deck_cards)
 
@@ -512,17 +522,58 @@ class HearthstoneDeckBuilder:
                     if sum(1 for c in deck_cards if c['id'] == card['id']) >= 2:
                         continue
 
-                deck_cards.append(card)        # Organize the final deck
+                deck_cards.append(card)        # Calculate main deck stats excluding sideboard
+        main_deck_cards = [card for card in deck_cards if card not in sideboard_cards]
+
+        # Organize the final deck
         final_deck = {
             'class': hero_class,
             'strategy': strategy,
             'format': format_type,
-            'card_count': len(deck_cards),
+            'card_count': len(main_deck_cards),  # Only count main deck cards
             'cards': deck_cards,
-            'mana_curve': self._calculate_mana_curve(deck_cards),
-            'card_types': self._count_card_types(deck_cards),
-            'deck_code': None
+            'mana_curve': self._calculate_mana_curve(main_deck_cards),  # Calculate curve for main deck only
+            'card_types': self._count_card_types(main_deck_cards),  # Count types for main deck only
+            'deck_code': None,
+            'sideboard': []  # Initialize empty sideboard
         }
+
+        # Check for special cards that enable sideboards
+        for card in deck_cards:
+            if card['name'] == "E.T.C., Band Manager":
+                # Generate 3 random cards for sideboard
+                sideboard_cards = []
+                remaining_cards = class_cards_df[~class_cards_df['id'].isin([c['id'] for c in deck_cards])]
+                remaining_cards = self._sort_by_synergy_with_deck(remaining_cards, deck_cards)
+
+                # Add up to 3 synergistic cards
+                for index, card_row in remaining_cards.head(3).iterrows():
+                    sideboard_card = self.card_query.get_card_by_id(card_row['id'])
+                    if sideboard_card:
+                        sideboard_cards.append(sideboard_card)
+
+                final_deck['sideboard'] = sideboard_cards
+                break
+            elif card['name'] == "Zilliax Deluxe 3000":
+                # Convert name and card_set columns to regular Python strings
+                modules_list = []
+                for idx, row in class_cards_df.iterrows():
+                    name = str(row['name'])
+                    if 'Module' in name and 'Zilliax' in name:
+                        modules_list.append(row)
+
+                # Convert filtered list back to DataFrame
+                modules = pd.DataFrame(modules_list) if modules_list else pd.DataFrame()
+
+                if not modules.empty:
+                    modules = modules.head(2)  # Take up to 2 modules
+                    sideboard_cards = []
+                    for _, module_row in modules.iterrows():
+                        module_card = self.card_query.get_card_by_id(module_row['id'])
+                        if module_card:
+                            sideboard_cards.append(module_card)
+                    final_deck['sideboard'] = sideboard_cards
+                break
 
         # Generate the deck code
         deck_code = self.generate_deck_code(final_deck)
@@ -694,7 +745,7 @@ class HearthstoneDeckBuilder:
         results = cursor.fetchall()
         format_sets = [row[0] for row in results]
 
-        print(f"Format {format_type} legal sets: {format_sets}")
+        #print(f"Format {format_type} legal sets: {format_sets}")
         return format_sets
 
     def plot_mana_curve(self, deck):
@@ -781,71 +832,94 @@ class HearthstoneDeckBuilder:
 
         # Create a new Deck object with the specified format
         hs_deck = Deck()
-        #hs_deck.heroes = [class_id]
         hs_deck.format = format_type
 
         # Debug output
         print(f"Class ID: {class_id}, Format: {format_type}")
-        print(f"Total cards in deck: {len(deck['cards'])}")        # Count cards by their dbf_id - use a dictionary to track duplicates
+        print(f"Total cards in deck: {len(deck['cards'])}")
+        # Calculate Zilliax Deluxe 3000's cost if present
+        for card in deck['cards']:
+            if card['name'] == "Zilliax Deluxe 3000" and 'sideboard' in deck and deck['sideboard']:
+                # Calculate total module cost
+                module_cost = sum(module['cost'] for module in deck['sideboard'])
+                # Update Zilliax's cost
+                card['cost'] = module_cost
+                break
+
+        # Count cards by their dbf_id - use a dictionary to track duplicates
         cards_by_dbfid = {}
+        sideboard_by_dbfid = {}  # New dictionary for sideboard cards        # Count cards directly by dbfid for better accuracy        # First group cards by name to get correct counts
+        cards_by_name = {}
+        for card in deck['cards']:
+            cards_by_name[card['name']] = cards_by_name.get(card['name'], 0) + 1
 
-        # First, count how many times each card ID appears in the deck
-        card_id_count = {}
-        for card in deck['cards']:            # Count cards by their reference name rather than ID to handle variants
-            # This catches both prefix and postfix variants like CORE_REV_601, REV_601, and REV_601_WEAPON
-            if card['name'] not in card_id_count:
-                card_id_count[card['name']] = 1
-            else:
-                card_id_count[card['name']] = card_id_count.get(card['name'], 0) + 1
-
-        print(card_id_count)
-
-        # Now process each unique card name
-        for card_name, count in card_id_count.items():
-            # Get the dbfid for one instance of this card (prefer the one in the deck)
-            card_id = None
-            for card in deck['cards']:
-                if card['name'] == card_name:
-                    card_id = card['id']
-                    break
-
-            if not card_id:
-                print(f"Warning: Cannot find ID for card {card_name}")
-                continue
-
+        # Then get the dbfid for each unique card name with its count
+        for card_name, count in cards_by_name.items():
+            # Get the dbfid using any card instance with this name
+            card = next(c for c in deck['cards'] if c['name'] == card_name)
             query = "SELECT dbfid FROM cards WHERE id = ?"
-            cursor.execute(query, (card_id,))
+            cursor.execute(query, (card['id'],))
             card_row = cursor.fetchone()
 
-            if not card_row:
-                print(f"Warning: Card ID {card_id} not found in database")
-                continue
+            if card_row:
+                dbfid = card_row['dbfid']
+                cards_by_dbfid[dbfid] = count  # Use the count from cards_by_name
+            else:
+                print(f"Warning: Card {card_name} not found in database")
 
-            dbfid = card_row['dbfid']
-            # Add the count for this card
-            cards_by_dbfid[dbfid] = cards_by_dbfid.get(dbfid, 0) + count
+        # Handle sideboard directly by dbfid too
+        if 'sideboard' in deck and deck['sideboard']:
+            for card in deck['sideboard']:
+                query = "SELECT dbfid FROM cards WHERE id = ?"
+                cursor.execute(query, (card['id'],))
+                card_row = cursor.fetchone()
 
-            # Print the card info for debugging
-           # print(f"Card ID {card_id} occurs {count} times, dbfid: {dbfid}")
+                if card_row:
+                    dbfid = card_row['dbfid']
+                    sideboard_by_dbfid[dbfid] = 1  # Always 1 for sideboard cards
+                else:
+                    print(f"Warning: Sideboard card {card['name']} not found in database")
+                    print(f"Warning: Card {card['name']} not found in database")
 
-        # Debug output of card counts
-        #print(f"Card count by dbfid: {len(cards_by_dbfid)} unique cards")
-
-        # Convert the dictionary to the format required by hearthstone-deckstrings
-        deck_cards = []
-
-        for dbfid, count in cards_by_dbfid.items():
-            # The hearthstone library expects a list of [dbfid, count] pairs
-            deck_cards.append([dbfid, count])
-            #print(f"Added card dbfid {dbfid} with count {count}")
+        # Convert the dictionaries to the format required by hearthstone-deckstrings
+        deck_cards = [[dbfid, count] for dbfid, count in cards_by_dbfid.items()]
+        sideboard_cards = [[dbfid, count] for dbfid, count in sideboard_by_dbfid.items()]
 
         # Generate the deck code
         try:
-            # Explicitly set all required parameters for write_deckstring
+            # Create sideboard mapping for Zilliax modules or ETC band members
+            sideboards = []
+            if sideboard_cards:
+                for card in deck['cards']:
+                    if card['name'] == "Zilliax Deluxe 3000" or card['name'] == "E.T.C., Band Manager":
+                        for sideboard_card in sideboard_cards:
+                            sideboards.append([sideboard_card[0], 1])  # Add each sideboard card with count 1
+                        break
+
+            # Generate deck code with sideboard            # Convert lists to correct format for deckstrings
+            formatted_deck_cards = []
+            for dbfid, count in cards_by_dbfid.items():
+                formatted_deck_cards.append([dbfid, count])
+
+            # Format sideboard entries if they exist
+            formatted_sideboards = None
+            if sideboards:
+                formatted_sideboards = {}
+                # Key is the owner card's dbfid
+                for card in deck['cards']:
+                    if card['name'] in ["Zilliax Deluxe 3000", "E.T.C., Band Manager"]:
+                        # Get the owner card's dbfid
+                        cursor.execute("SELECT dbfid FROM cards WHERE id = ?", (card['id'],))
+                        owner_row = cursor.fetchone()
+                        if owner_row:
+                            owner_dbfid = owner_row['dbfid']
+                            formatted_sideboards[owner_dbfid] = [[dbfid, 1] for dbfid in sideboard_by_dbfid.keys()]
+
             deck_code = write_deckstring(
-                cards=deck_cards,
+                cards=formatted_deck_cards,
                 heroes=[class_id],
-                format=format_type
+                format=format_type,
+                sideboards=formatted_sideboards
             )
             return deck_code
         except Exception as e:
@@ -915,46 +989,44 @@ def main():
             print(f"### {deck['class']} {deck['strategy'].title()} Deck")
             print(f"# Class: {deck['class']}")
             print(f"# Format: {deck['format'].title()}")
-            print("#")            # Count card occurrences by name only (ignoring ID)
+            print("#")
             card_counts_by_name = {}
             for card in deck['cards']:
                 card_counts_by_name[card['name']] = card_counts_by_name.get(card['name'], 0) + 1
-
-            # Group cards by mana cost for sorted output
             by_cost = {}
-            processed_names = set()  # Track which card names we've already processed
 
-            # First, sort all cards by cost
+            # Sort all cards by cost
             for card in deck['cards']:
                 cost = card['cost']
                 if cost not in by_cost:
                     by_cost[cost] = []
+                by_cost[cost].append(card)
 
-                # Only add each unique card name once to the cost group
-                if card['name'] not in processed_names:
-                    by_cost[cost].append(card)
-                    processed_names.add(card['name'])
-
-            # Print cards in mana cost order
             for cost in sorted(by_cost.keys()):
                 cost_cards = by_cost[cost]
-                # Sort by name within each cost group
-                for card in sorted(cost_cards, key=lambda x: x['name']):
-                    count = card_counts_by_name[card['name']]
-                    print(f"# {count}x ({cost}) {card['name']}")
+                # Count occurrences of each card name at this cost
+                card_counts = {}
+                for card in cost_cards:
+                    card_counts[card['name']] = card_counts.get(card['name'], 0) + 1
+                # Sort by name and print with counts
+                for name in sorted(card_counts.keys()):
+                    count = card_counts[name]
+                    print(f"# {count}x ({cost}) {name}")
 
-            # Print special cards with modules if any exist (like Zilliax)
-            # This would require additional logic to identify and group module cards
+            # Print sideboard section if it exists
+            if deck.get('sideboard'):
+                print("\n# Sideboard:")
+                for card in sorted(deck['sideboard'], key=lambda x: (x['cost'], x['name'])):
+                    print(f"# 1x ({card['cost']}) {card['name']}")
 
-            # Print extra statistics in a comment section
-            #print("\n# Card counts by type:")
-            #for card_type, count in deck['card_types'].items():
-            #    print(f"# {card_type}: {count}")
+            print("\n# Card counts by type:")
+            for card_type, count in deck['card_types'].items():
+                print(f"# {card_type}: {count}")
 
-            #print("\n# Mana curve:")
-            #for cost, count in deck['mana_curve'].items():
-            #    cost_label = cost if int(cost) < 7 else "7+"
-            #    print(f"# {cost_label}: {count}")
+            print("\n# Mana curve:")
+            for cost, count in deck['mana_curve'].items():
+                cost_label = cost if int(cost) < 7 else "7+"
+                print(f"# {cost_label}: {count}")
 
             print("\nDeck Code:")
             print(deck['deck_code'])

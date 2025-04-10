@@ -35,6 +35,22 @@ twist_sets = [
     'WHIZBANGS_WORKSHOP'
 ]
 
+invalid_sets = [
+    'TB',
+    'HERO_SKINS',
+    'TGT',
+    'BATTLEGROUNDS',
+    'LETTUCE',
+    'PLACEHOLDER_202204',
+    'CREDITS',
+    'TUTORIAL',
+    'EVENT',
+    'SPACE',
+    'MISSIONS',
+    'WONDERS',
+    'ISLAND_VACATION'
+]
+
 class HearthstoneDBBuilder:
     """Class to build a database of all Hearthstone cards using HearthstoneJSON API."""
 
@@ -722,7 +738,7 @@ class HearthstoneDBBuilder:
 
         This marks each card set with flags indicating which format(s) it belongs to.
         """
-        print("Updating card set format information...")
+        #print("Updating card set format information...")
 
         # Update Standard sets
         placeholders = ','.join(['?'] * len(standard_sets))
@@ -745,6 +761,13 @@ class HearthstoneDBBuilder:
         WHERE name IN ({placeholders})
         """, classic_sets)
 
+        # Update Invalid sets
+        placeholders = ','.join(['?'] * len(invalid_sets))
+        self.cursor.execute(f"""
+        UPDATE card_sets SET wild = 0, standard = 0, classic = 0, twist = 0
+        WHERE name IN ({placeholders})
+        """, invalid_sets)
+
         self.conn.commit()
 
         # Print format information
@@ -756,9 +779,9 @@ class HearthstoneDBBuilder:
 
         set_info = self.cursor.fetchall()
 
-        for row in set_info:
-            name, collectible, standard, wild, classic = row
-            print(f"{name:<25} {collectible:<12} {standard:<10} {wild:<10} {classic:<10}")
+        #for row in set_info:
+        #    name, collectible, standard, wild, classic = row
+        #    print(f"{name:<25} {collectible:<12} {standard:<10} {wild:<10} {classic:<10}")
 
         print("\nCard set format information updated")
 
