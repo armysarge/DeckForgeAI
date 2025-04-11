@@ -14,6 +14,10 @@ from query_cards import HearthstoneCardQuery
 from hearthstone.deckstrings import Deck, write_deckstring
 from hearthstone.enums import FormatType
 
+#TODO: Fix Zilliax not summing its cost up correctly
+#TODO: Duplicates not being handled correctly in the deck generation
+#TODO: Fix deck code generation to correctly show sideboard cards
+
 class HearthstoneDeckBuilder:
     """AI-powered Hearthstone deck builder using machine learning techniques."""
 
